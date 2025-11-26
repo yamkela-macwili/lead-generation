@@ -1,11 +1,43 @@
 from fpdf import FPDF
 import pandas as pd
 from config import PACKAGE_LEADS, TARGET_REGION, SELECTED_NICHE, BUSINESS_CONTACT, REPORTS_DIR
+import unicodedata
 
 class LeadReportPDF:
     def __init__(self, df, package):
         self.package = package
         self.leads = df.head(PACKAGE_LEADS[package]) if package in PACKAGE_LEADS else df.head(50)
+
+    def _clean_text(self, text):
+        """Clean text to handle Unicode characters for PDF generation."""
+        if not text or pd.isna(text):
+            return 'N/A'
+
+        # Convert to string if not already
+        text = str(text)
+
+        # Normalize Unicode characters
+        text = unicodedata.normalize('NFKD', text)
+
+        # Remove or replace problematic characters
+        # Replace common Unicode punctuation with ASCII equivalents
+        replacements = {
+            '\u2013': '-',  # en dash
+            '\u2014': '-',  # em dash
+            '\u2018': "'",  # left single quotation mark
+            '\u2019': "'",  # right single quotation mark
+            '\u201c': '"',  # left double quotation mark
+            '\u201d': '"',  # right double quotation mark
+            '\u2026': '...',  # horizontal ellipsis
+        }
+
+        for unicode_char, ascii_char in replacements.items():
+            text = text.replace(unicode_char, ascii_char)
+
+        # Remove any remaining non-ASCII characters
+        text = ''.join(char for char in text if ord(char) < 128)
+
+        return text.strip()
 
     def generate(self, filename=None):
         if filename is None:
@@ -43,16 +75,23 @@ class LeadReportPDF:
 
         pdf.set_font('Arial', size=10)
         for _, row in self.leads.iterrows():
+            # Clean all text fields to handle Unicode
+            name = self._clean_text(row['name'])[:18]
+            phone = self._clean_text(row['phone'])[:12]
+            address = self._clean_text(row['address'])[:18]
+            category = self._clean_text(row['category'])[:10]
+
             pdf.cell(10, 8, str(row['id']), 1, align='C')
-            pdf.cell(50, 8, row['name'][:18] if pd.notna(row['name']) else 'N/A', 1)
-            pdf.cell(30, 8, row['phone'][:12] if pd.notna(row['phone']) else 'N/A', 1)
-            pdf.cell(50, 8, row['address'][:18] if pd.notna(row['address']) else 'N/A', 1)
-            pdf.cell(30, 8, row['category'][:10] if pd.notna(row['category']) else 'N/A', 1)
+            pdf.cell(50, 8, name, 1)
+            pdf.cell(30, 8, phone, 1)
+            pdf.cell(50, 8, address, 1)
+            pdf.cell(30, 8, category, 1)
             pdf.ln()
 
         # Footer on last page
         pdf.cell(200, 10, txt="", ln=True, align='C')
-        pdf.cell(200, 10, txt=f"For inquiries: {BUSINESS_CONTACT['name']} | {BUSINESS_CONTACT['phone']} | {BUSINESS_CONTACT['email']}", align='C', ln=True)
+        footer_text = self._clean_text(f"For inquiries: {BUSINESS_CONTACT['name']} | {BUSINESS_CONTACT['phone']} | {BUSINESS_CONTACT['email']}")
+        pdf.cell(200, 10, txt=footer_text, align='C', ln=True)
 
         pdf.output(filename)
         return filename

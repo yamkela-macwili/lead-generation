@@ -104,40 +104,92 @@ class LeadScraper:
         """
         Extract information from a single listing.
         """
-        name = listing.find('h2')
+        # Get all text content
+        full_text = listing.get_text(separator=' ', strip=True)
+
+        # Skip if this looks like footer/navigation content
+        skip_keywords = ['premium user', 'view details', 'operating:', 'open now', 'closed now',
+                        'previous next', 'the new yep!', '© yep!', 'waterproofing professionals',
+                        'home services', 'building contractors']
+        if any(keyword.lower() in full_text.lower() for keyword in skip_keywords):
+            return None
+
+        # Try to extract structured data first
+        name = None
+        address = None
+        phone = None
+
+        # Look for common patterns in the text
+        # Pattern 1: Name followed by address
+        lines = full_text.split(',')
+        if len(lines) >= 2:
+            # First part might be name
+            potential_name = lines[0].strip()
+            if len(potential_name) > 3 and not potential_name.isdigit():
+                name = potential_name
+
+            # Look for address pattern (street, city, postal code)
+            for line in lines:
+                line = line.strip()
+                # Check if it looks like an address (contains street numbers, city names, postal codes)
+                if (re.search(r'\d+', line) and  # Has numbers
+                    any(city in line.lower() for city in ['cape town', 'johannesburg', 'durban', 'pretoria', 'port elizabeth', 'bloemfontein', 'east london', 'kimberley']) or
+                    re.search(r'\d{4}', line)):  # Has postal code
+                    address = line
+                    break
+
+        # If no structured extraction, try to parse the full text
+        if not name:
+            # Remove common prefixes and try to extract business name
+            text = re.sub(r'^(premium user|[A-Z])', '', full_text).strip()
+            # Take first meaningful part as name
+            parts = text.split()
+            if parts:
+                # Find a sequence that looks like a business name
+                name_parts = []
+                for part in parts[:5]:  # Check first 5 words
+                    if len(part) > 2 and not part.isdigit():
+                        name_parts.append(part)
+                    else:
+                        break
+                name = ' '.join(name_parts) if name_parts else None
+
+        # Extract phone number using more comprehensive regex
+        phone_patterns = [
+            r'\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b',  # 123-456-7890
+            r'\b\d{10}\b',                        # 1234567890
+            r'\+\d{2}[-.\s]\d{1}[-.\s]\d{3}[-.\s]\d{3}[-.\s]\d{3}\b',  # +27 1 234 567 890
+            r'\d{2}[-.\s]\d{3}[-.\s]\d{4}',      # 27 123 4567 (South African)
+        ]
+
+        for pattern in phone_patterns:
+            phones = re.findall(pattern, full_text)
+            if phones:
+                phone = phones[0]
+                break
+
+        # Clean up the extracted data
         if name:
-            name = name.text.strip()
-        else:
-            # Try other selectors
-            name = listing.find('h3')
-            if name:
-                name = name.text.strip()
-            else:
-                # Try getting text directly
-                name = listing.get_text().split('\n')[0].strip() if listing.get_text() else None
+            # Remove extra whitespace and clean up
+            name = re.sub(r'\s+', ' ', name).strip()
+            # Remove if it's too short or looks like garbage
+            if len(name) < 3 or name.isdigit():
+                name = None
 
-        address = listing.find('span', class_='address')
-        address = address.text.strip() if address else None
+        if address:
+            address = re.sub(r'\s+', ' ', address).strip()
 
-        phone = listing.find('span', class_='phone')
-        if phone:
-            phone = phone.text.strip()
-        else:
-            # Use regex to find phone numbers in text
-            text = listing.get_text()
-            phones = re.findall(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', text)  # US style, adjust for local
-            phone = phones[0] if phones else None
+        # Only return if we have at least a name
+        if name:
+            return {
+                'name': name,
+                'phone': phone or 'N/A',
+                'address': address or 'N/A',
+                'category': niche,
+                'niche': niche
+            }
 
-        # Add more fields as available
-        category = listing.get('data-category', 'unknown')
-
-        return {
-            'name': name,
-            'phone': phone,
-            'address': address,
-            'category': category,
-            'niche': niche
-        } if name else None
+        return None
 
 if __name__ == '__main__':
     scraper = LeadScraper()

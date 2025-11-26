@@ -19,10 +19,21 @@ class LeadCleaner:
         # Clean phone numbers
         df['phone'] = df['phone'].apply(self.clean_phone)
 
-        # Filter by region (assuming address contains region or something)
-        df = df[df['address'].str.contains(TARGET_REGION, na=False, case=False) |
+        # Filter by region - more inclusive for South Africa
+        if TARGET_REGION.lower() == 'south africa':
+            # For South Africa, check for major cities/provinces
+            sa_regions = [
+                'johannesburg', 'cape town', 'durban', 'pretoria', 'port elizabeth',
+                'bloemfontein', 'east london', 'kimberley', 'pietermaritzburg',
+                'gauteng', 'western cape', 'kwazulu-natal', 'eastern cape',
+                'free state', 'north west', 'limpopo', 'mpumalanga', 'northern cape'
+            ]
+            region_filter = df['address'].str.contains('|'.join(sa_regions), na=False, case=False)
+        else:
+            # For other regions, check for exact region match
+            region_filter = df['address'].str.contains(TARGET_REGION, na=False, case=False)
 
-                df['address'].isnull()]
+        df = df[region_filter | df['address'].isnull()]
 
         # Fill missing values
         df = df.fillna('N/A')

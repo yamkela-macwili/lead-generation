@@ -32,7 +32,6 @@ def main():
     # Clean leads
     cleaner = LeadCleaner()
     df = cleaner.clean_leads(df)
-    print(f"Cleaned to {len(df)} leads.")
 
     # Ensure directories exist
     os.makedirs('reports', exist_ok=True)
