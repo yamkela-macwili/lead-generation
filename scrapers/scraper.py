@@ -4,66 +4,108 @@ import re
 import pandas as pd
 from config import *
 import time
+import os
+from urllib.robotparser import RobotFileParser
+import json
 
 class LeadScraper:
     def __init__(self):
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': DESCRIPTIVE_USER_AGENT
         }
+        self.cache = {} if CACHE_ENABLED else None
+        self.cache_file = 'scraper_cache.json'
+        self.load_cache()
+
+    def load_cache(self):
+        if CACHE_ENABLED and os.path.exists(self.cache_file):
+            with open(self.cache_file, 'r') as f:
+                self.cache = json.load(f)
+
+    def save_cache(self):
+        if CACHE_ENABLED:
+            with open(self.cache_file, 'w') as f:
+                json.dump(self.cache, f)
+
+    def check_robots_txt(self, url):
+        if not RESPECT_ROBOTS_TXT:
+            return True
+        try:
+            rp = RobotFileParser()
+            rp.set_url(url + '/robots.txt')
+            rp.read()
+            return rp.can_fetch(self.headers['User-Agent'], url)
+        except:
+            return True  # If can't read robots.txt, assume allowed
+
+    def cached_request(self, url):
+        if CACHE_ENABLED and url in self.cache:
+            # Return cached text as response-like object
+            class MockResponse:
+                def __init__(self, text):
+                    self.text = text
+                    self.status_code = 200
+            return MockResponse(self.cache[url])
+        if not self.check_robots_txt(url):
+            print(f"Blocked by robots.txt: {url}")
+            return None
+        response = requests.get(url, headers=self.headers, timeout=10)
+        if response.status_code != 200:
+            return response  # Return even failed for status check
+        if CACHE_ENABLED:
+            self.cache[url] = response.text
+            self.save_cache()
+        time.sleep(RATE_LIMIT_SECONDS)
+        return response
 
     def scrape_leads(self, niche, max_pages=5):
         """
-        Scrape leads for a given niche from multiple sources.
+        Scrape leads for a given niche from niche-specific sources.
         """
         leads = []
-        query = niche.replace('_', '+')
+        if niche not in NICHE_SOURCES:
+            print(f"No sources defined for niche: {niche}")
+            return pd.DataFrame()
 
-        for source in SCRAPER_SOURCES:
+        sources = NICHE_SOURCES[niche]
+
+        for source in sources:
             print(f"\nTrying source: {source['name']}")
             source_leads = []
 
             # Construct search URL for this source
-            if 'category' in source['search_path']:
-                # Category-based search (like Yep)
-                category = CATEGORY_MAPPINGS.get(niche, '81517')  # Default to real estate
-                search_path = source['search_path'].format(category=category, region=TARGET_REGION.replace(' ', '+'))
+            region_formatted = TARGET_REGION.replace(' ', '+')
+            if '{query}' in source['search_path']:
+                query = niche.replace('_', '+')
+                search_path = source['search_path'].format(query=query, region=region_formatted)
             else:
-                # Query-based search
-                search_path = source['search_path'].format(query=query, region=TARGET_REGION.replace(' ', '+'))
+                search_path = source['search_path'].format(region=region_formatted)
 
             base_url = f"{source['url']}{search_path}"
             print(f"Scraping URL: {base_url}")
 
             for page in range(1, max_pages + 1):
-                if 'category' in source['search_path']:
-                    # For category-based, pages might be &page= or ?page=
-                    page_url = f"{base_url}&page={page}" if page > 1 else base_url
-                else:
-                    page_url = f"{base_url}&page={page}" if page > 1 else base_url
-
+                page_url = f"{base_url}&page={page}" if page > 1 else base_url
                 print(f"Fetching page {page}: {page_url}")
 
                 try:
-                    response = requests.get(page_url, headers=self.headers, timeout=10)
-                    print(f"Response status: {response.status_code}")
-
-                    if response.status_code != 200:
-                        print(f"Failed to fetch page {page} from {source['name']}, trying next page.")
+                    response_text = self.cached_request(page_url)
+                    if response_text is None:
                         continue
-
-                    soup = BeautifulSoup(response.text, 'html.parser')
+                    if hasattr(response_text, 'status_code') and response_text.status_code != 200:
+                        print(f"Failed to fetch page {page} from {source['name']}, status: {response_text.status_code}")
+                        continue
+                    elif hasattr(response_text, 'status_code'):
+                        soup = BeautifulSoup(response_text.text, 'html.parser')
+                    else:
+                        soup = BeautifulSoup(response_text, 'html.parser')
 
                     # Try different selectors for business listings
                     business_listings = (
-                        soup.find_all('div', class_='listing-item') or
-                        soup.find_all('div', class_='business-listing') or
-                        soup.find_all('article', class_='listing') or
-                        soup.find_all('div', class_=re.compile(r'listing|business')) or
-                        soup.find_all('tr', class_=re.compile(r'listing|business')) or
+                        soup.find_all('div', class_=re.compile(r'listing|business|agent|doctor|tutor')) or
+                        soup.find_all('article', class_=re.compile(r'listing|business')) or
                         soup.find_all('li', class_=re.compile(r'listing|business')) or
-                        # For Yep specifically
-                        soup.find_all('div', class_=re.compile(r'item|card|result')) or
-                        soup.find_all('a', href=re.compile(r'/business/'))
+                        soup.find_all('a', href=re.compile(r'/agent/|/doctor/|/tutor/|/business/'))
                     )
 
                     print(f"Found {len(business_listings)} potential listings on page {page}")
@@ -77,8 +119,6 @@ class LeadScraper:
                         if len(leads) >= 500:  # Global limit
                             break
 
-                    time.sleep(2)  # Rate limiting between pages
-
                     if len(leads) >= 500:
                         break
 
@@ -87,12 +127,6 @@ class LeadScraper:
                     continue
 
             print(f"Leads from {source['name']}: {len(source_leads)}")
-
-            # If we got enough leads from this source, we can stop or continue for more variety
-            if len(source_leads) >= MIN_LEADS_PER_SOURCE:
-                print(f"Got {len(source_leads)} leads from {source['name']}, continuing to next source for more variety...")
-            else:
-                print(f"Only {len(source_leads)} leads from {source['name']}, trying next source...")
 
             if len(leads) >= 500:  # Global limit
                 break

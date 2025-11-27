@@ -8,7 +8,7 @@ class LeadCleaner:
 
     def clean_leads(self, df):
         """
-        Clean and filter the leads DataFrame.
+        Clean and filter the leads DataFrame, add quality scoring.
         """
         if df.empty:
             return df
@@ -38,11 +38,33 @@ class LeadCleaner:
         # Fill missing values
         df = df.fillna('N/A')
 
+        # Add quality score
+        df['score'] = df.apply(self.calculate_lead_score, axis=1)
+
+        # Sort by score descending
+        df = df.sort_values('score', ascending=False)
+
         # Add row numbers
         df.reset_index(drop=True, inplace=True)
         df['id'] = df.index + 1
 
         return df
+
+    def calculate_lead_score(self, lead):
+        """
+        Calculate lead quality score.
+        """
+        score = 0
+        if lead['phone'] and lead['phone'] != 'N/A':
+            score += 30
+        # Assuming email not collected yet, but placeholder
+        # if lead.get('email'): score += 20
+        # For now, assume location match if address is not N/A
+        if lead['address'] and lead['address'] != 'N/A':
+            score += 25
+        # Placeholder for recent activity
+        # if lead.get('recent_activity'): score += 25
+        return score
 
     def clean_phone(self, phone):
         """
@@ -52,12 +74,14 @@ class LeadCleaner:
             return 'N/A'
         # Remove non-digits
         digits = re.sub(r'\D', '', phone)
-        # Apply local format, e.g., Lesotho: 6xx xxx xxx or +266 xxx xxx xxx
-        if len(digits) == 9 and digits.startswith('6'):
-            return f"6{digits[1:3]} {digits[3:6]} {digits[6:]}"
-        elif len(digits) == 12 and digits.startswith('266'):
-            digits = digits[3:]
-            return f"+266 {digits[:3]} {digits[3:6]} {digits[6:]}"
+        # Apply South African format
+        if len(digits) == 10 and digits.startswith('0'):
+            return f"0{digits[1:3]} {digits[3:6]} {digits[6:]}"
+        elif len(digits) == 9:
+            return f"0{digits[0:2]} {digits[2:5]} {digits[5:]}"
+        elif len(digits) == 12 and digits.startswith('27'):
+            digits = digits[2:]
+            return f"0{digits[0:2]} {digits[2:5]} {digits[5:]}"
         else:
             return phone  # Leave as is if unknown format
 

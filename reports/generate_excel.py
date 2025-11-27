@@ -1,5 +1,5 @@
 import pandas as pd
-from openpyxl import Workbook
+import xlsxwriter
 from config import EXPORTS_DIR, PACKAGE_LEADS
 
 class LeadReportExcel:
@@ -11,24 +11,47 @@ class LeadReportExcel:
         if filename is None:
             filename = f"{EXPORTS_DIR}{self.package}_leads_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx"
 
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Business Leads"
+        # Create workbook with xlsxwriter
+        workbook = xlsxwriter.Workbook(filename)
+        worksheet = workbook.add_worksheet('Business Leads')
 
-        # Write headers
-        headers = ['ID', 'Business Name', 'Phone', 'Address', 'Category']
-        for col_num, header in enumerate(headers, 1):
-            ws.cell(row=1, column=col_num, value=header)
+        # Add headers
+        headers = ['ID', 'Business Name', 'Phone', 'Address', 'Category', 'Score']
+        for col_num, header in enumerate(headers):
+            worksheet.write(0, col_num, header)
 
         # Write data
-        for row_num, (_, row) in enumerate(self.leads.iterrows(), 2):
-            ws.cell(row=row_num, column=1, value=row.get('id', 'N/A'))
-            ws.cell(row=row_num, column=2, value=row.get('name', 'N/A'))
-            ws.cell(row=row_num, column=3, value=row.get('phone', 'N/A'))
-            ws.cell(row=row_num, column=4, value=row.get('address', 'N/A'))
-            ws.cell(row=row_num, column=5, value=row.get('category', 'N/A'))
+        for row_num, (_, row) in enumerate(self.leads.iterrows(), 1):
+            worksheet.write(row_num, 0, row.get('id', 'N/A'))
+            worksheet.write(row_num, 1, row.get('name', 'N/A'))
+            worksheet.write(row_num, 2, row.get('phone', 'N/A'))
+            worksheet.write(row_num, 3, row.get('address', 'N/A'))
+            worksheet.write(row_num, 4, row.get('category', 'N/A'))
+            worksheet.write(row_num, 5, row.get('score', 0))
 
-        wb.save(filename)
+        # Add analytics sheet for premium
+        if self.package == 'premium':
+            analytics_sheet = workbook.add_worksheet('Analytics')
+
+            # Lead quality chart
+            chart = workbook.add_chart({'type': 'column'})
+            chart.add_series({
+                'categories': '=Business Leads!$F$2:$F$' + str(len(self.leads) + 1),
+                'values': '=Business Leads!$G$2:$G$' + str(len(self.leads) + 1),
+                'name': 'Lead Scores'
+            })
+            chart.set_title({'name': 'Lead Quality Distribution'})
+            analytics_sheet.insert_chart('A1', chart)
+
+            # Geographic data
+            analytics_sheet.write(0, 5, 'City')
+            analytics_sheet.write(0, 6, 'Count')
+            cities = self.leads['address'].str.split(',').str[0].value_counts().head(5)
+            for i, (city, count) in enumerate(cities.items(), 1):
+                analytics_sheet.write(i, 5, city)
+                analytics_sheet.write(i, 6, count)
+
+        workbook.close()
         return filename
 
 if __name__ == '__main__':
